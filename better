@@ -1,0 +1,120 @@
+#!/bin/sh -f
+# the next line restarts using wish \
+exec wish "$0" "$@"
+#!/local/TclTk8.0/bin/tclsh8.0
+# 
+# A more flexible startup mechanism is below, but it
+# assumes you have tclsh in your path
+#!/bin/sh -f
+# the next line restarts using wish \
+exec tclsh "$0" "$@"
+
+#==============================================================
+# Global Variables
+#==============================================================
+
+#==============================================================
+#==============================================================
+# Main program
+#==============================================================
+#==============================================================
+
+set Damage 0
+set Direction 0
+set Fuel   1000
+
+#set LogF [open "log.[pid]" w]
+#set LogF [open "/dev/null" w]
+#set LogF stderr
+
+#puts $LogF "Command line: ([lindex $argv 0] [lindex $argv 1])"
+set done 0
+#puts $LogF "1: starting"
+set dirchange 5
+set nodirchange 0
+set nospeedchange 0
+set olddamage 0
+while {!$done} {
+   set speedchange 0
+   gets stdin statline
+   gets stdin scanline
+   #puts $LogF "Controller: ($statline) ($scanline)"
+   #flush $LogF
+   set xpos 0
+   set ypos 0
+   set direction 0
+   set velocity 0
+   set fuel 0
+   set damage 0
+   set damagetype 0
+   regexp {([0-9]*) ([0-9]*) ([0-9]*) ([0-9]*) ([0-9]*) ([0-9]*) ([0-9]*)} \
+           $statline  dummy xpos ypos direction velocity fuel damage damagetype
+   regexp {([01]) (.*)} $scanline dummy scanflag scanresults
+   if {$velocity == 0} {
+      set speedchange 1
+   }
+   if {$damage > [expr $olddamage+5]} {
+      # then handle damage type
+      if {$velocity < 7} {
+         set speedchange 5
+         set nospeedchange 25
+         set sc 5
+         set dirchange 5
+         set nodirchange 0
+      }
+   }
+   set olddamage $damage
+   set action scan
+   if {$scanflag > 0} {
+      regexp {([0-9]*) (\-?[0-9\.]*) ([0-9\.]*) ([0-9\.]*)} $scanresults dummy\
+              objectid posangle distance dirangle
+      if {$objectid == 2} {
+         if {$distance < 100} {
+            set action fire
+         } else {
+            if {$velocity < 8} {
+               set speedchange 1
+            }
+         }
+         #set difa [expr $direction - $dirangle]
+         set difa $posangle
+         set dirchange [expr round($posangle/(-1+(-4*((301.0-$distance)/301))))]
+         set nodirchange 0
+         if {0} {
+           if {$difa < 0} {
+              set difa [expr 360 - $difa]
+           }
+           if {$difa < 180} {
+              set dirchange [expr ($difa/20.0 + 1)]
+           } else { 
+              set dirchange [expr (360-$difa)/5.0 + 1]
+           }
+           set nodirchange 0
+         }
+      } elseif {$objectid == 0} {
+         set dirchange 5
+         set nodirchange 0
+         set speedchange -1
+      } elseif  {$objectid == 1} {
+         set dirchange 5
+         set nodirchange 0
+         if {$distance > 0 && $distance < 20} {
+            set speedchange -1
+         }
+      }
+   }
+   if {$nospeedchange > 0} {
+      incr nospeedchange -1
+   } else {
+      set sc $speedchange
+   }
+   puts "[expr round($dirchange)] $sc"
+   set sc 0
+   puts "$action"
+   flush stdout
+   incr nodirchange
+   if {$nodirchange > 200} {
+      set nodirchange 0
+      set dirchange [expr round(rand()*32432)%10]
+   }
+}

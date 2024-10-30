@@ -1,0 +1,629 @@
+#!/bin/sh -f
+# the next line restarts using wish \
+exec wish "$0" "$@"
+#
+# You can also hardcode the exec path on the first line
+# like the following:
+#!/local/TclTk8.0/bin/wish8.0
+# 
+
+set HelpText {
+#==============================================================
+# Playbots -- a Tcl/Tk based battlebots game
+# February 1, 2002
+# Copyright (C) 2002 Jonathan E. Cook
+#
+# Options:  
+#  -red player - sets the red player to be a programmed player
+#                where "player" is the pathname to the player 
+#                executable. This executable will be invoked with
+#                two command line arguments, an integer for the
+#                width and an integer for the height of the game.
+#  -blue player - same as for the -red switch, but the other player.
+#==============================================================
+}
+
+# not used 
+puts [image create bitmap tankbitmap -data "#define tank_width 16 #define tank_height 16 static unsigned char tank_bits[] = { 0x00, 0x00, 0x00, 0x00, 0x80, 0x01, 0x80, 0x01, 0xb0, 0x0d, 0xb0, 0x0d, 0xf0, 0x0f, 0xf0, 0x0f, 0xf0, 0x0f, 0xf0, 0x0f, 0xf0, 0x0f, 0xf0, 0x0f, 0x30, 0x0c, 0x30, 0x0c, 0x00, 0x00, 0x00, 0x00};"]
+
+
+#==============================================================
+# Options
+#==============================================================
+set BgColor wheat
+# below are not used yet
+set BlueColor blue
+set RedColor red
+
+#==============================================================
+# Global Variables
+#==============================================================
+set PI 3.1415926536
+set TwoPI [expr 2.0*$PI]
+set HalfPI [expr 0.5*$PI]
+
+# Flag to indicate the game is over
+set Finished 0
+
+set MaxDamage 400
+set MaxFuel 1000
+set FireCost -3
+set ScanCost -1
+set VelocityCost 0
+set SpeedChangeCost -1
+set CollideDamage 1
+set ScanRange 300
+set ScanAngle 0.5
+
+# WhoseTurn: name (color) of player who is currently taking a turn
+# (a ChangeTurn is done at the beginning, so WhoseNotTurn actually
+#  goes first)
+set WhoseTurn blue
+set WhoseNotTurn red
+
+#
+# Battlebot information structure
+#
+array set Bot [subst {
+blue,fuel   $MaxFuel
+blue,xpos   98
+blue,ypos   421
+blue,direction 4.5
+blue,velocity 6
+blue,damage 0
+blue,damagetype 0
+blue,tag   blue
+blue,doscan 0
+red,fuel   $MaxFuel
+red,xpos   240
+red,ypos   325
+red,direction 3.9
+red,velocity 8
+red,damage 0
+red,damagetype 0
+red,tag   red
+red,doscan 0
+}]
+set BotList [list blue red]
+
+#
+# Start the bots randomly
+#
+foreach b $BotList {
+   set Bot($b,xpos) [expr round(rand()*500 + 10)]
+   set Bot($b,ypos) [expr round(rand()*500 + 10)]
+   set Bot($b,velocity) [expr round(rand()*4)]
+   set Bot($b,direction) [expr rand()*$TwoPI]
+}
+
+#
+# Make some random objects
+#
+#set ObjectList [list [list 2 100 100 10] [list 2 200 280 20]]
+foreach i [list 1 2 3 4 5 6 7] {
+   set randx [expr round(rand()*500 + 10)]
+   set randy [expr round(rand()*400 + 10)]
+   set randsize [expr round(rand()*40 + 10)]
+   set obj [list $i $randx $randy $randsize]
+   lappend ObjectList $obj
+}
+
+# The variables Width and Height are global and contain the
+# game board dimensions, in terms of canvas pixels.
+# These are set in the proc InitBoard.
+
+
+#==============================================================
+# Procedures
+#==============================================================
+proc DegToRad {d} {
+   return [expr $d/360.0*$::TwoPI]
+}
+proc RadToDeg {r} {
+   return [expr round($r*360.0/$::TwoPI)]
+}
+
+#
+# returns the Distance between two points and the Angle 
+# from point 1 to point 2
+#
+proc DistanceAngle {x1 y1 x2 y2} {
+   set xd [expr double($x2)-$x1]
+   set yd [expr double($y2)-$y1]
+   set dist [expr sqrt(pow($xd,2)+pow($yd,2))]
+   set base [expr acos($xd/$dist)]
+   #puts "b=$base d=$dist xd=$xd yd=$yd"
+   if {$yd<0} {
+      #if {$xd<0} {}
+      #   set base [expr $base + $::PI/2]
+      #{} else {}
+         set base [expr 2*$::PI - $base]
+      #{}
+   }
+   return [list $dist $base]
+}
+
+#
+# Draw the battlebot on the canvas. This routine actually does
+# alot more than just draw. It applies the direction and velocity
+# to the current position, and updates that position. It then 
+# checks to see if the bot hit anything given its new position.
+#
+proc DrawBot {B Canvas} {
+   global Bot Width Height ObjectList BotList 
+   set deltax [expr cos($Bot($B,direction))*$Bot($B,velocity)]
+   set deltay [expr sin($Bot($B,direction))*$Bot($B,velocity)]
+   set newx [expr $Bot($B,xpos) + $deltax]
+   set newy [expr $Bot($B,ypos) + $deltay]
+   set dohit 0
+   # check for wall hit (y is upside down or backwards)
+   if {$newx <= 10 || $newx >= $Width || \
+       $newy <= 0 || $newy >= [expr $Height-10]} {
+      set dohit 1
+   }
+   # check for object hits (should catch corners now)
+   foreach o $ObjectList {
+      #set d [expr sqrt(pow($newx-[lindex $o 1],2)+pow($newy-[lindex $o 2],2))]
+      #if {$d <= [expr ([lindex $o 3]/2)+5]} {}
+      set xd [expr abs($newx-[lindex $o 1])]
+      set yd [expr abs($newy-[lindex $o 2])]
+      set hitd [expr ([lindex $o 3]/2)+5]
+      if {$xd <= $hitd && $yd <= $hitd} {
+         set dohit 1
+         break
+      }
+   }
+   # check for bot hits
+   foreach b $BotList {
+      if {$b != $B} {
+       set d [expr sqrt(pow($newx-$Bot($b,xpos),2)+pow($newy-$Bot($b,ypos),2))]
+       if {$d <= 11} {
+         set dohit 1
+         break
+         # We must cause the other bot to be hit, too!
+       }
+      }
+   }
+   if {$dohit} {
+      set Bot($B,direction) [expr rand()*$::TwoPI]
+      set newx [expr $newx - 5*$deltax]
+      set newy [expr $newy - 5*$deltay]
+      incr Bot($B,damage) $::CollideDamage
+      set Bot($B,damagetype) 1
+   } 
+   set Bot($B,xpos) $newx
+   set newx [expr int($newx)]
+   set Bot($B,ypos) $newy
+   set newy [expr int($newy)]
+   set newy [expr $Height-$newy]
+   #
+   # Now finally redraw the bot
+   #
+   $Canvas delete $Bot($B,tag)
+   #$Canvas create oval [expr $newx-5] [expr $newy-5] [expr $newx+5] \
+   #       [expr $newy+5] -width 1 -fill $B -tag $Bot($B,tag)
+   #$Canvas create bitmap $newx $newy -bitmap @tank.bmp -foreground $B \
+   #       -tag $Bot($B,tag)
+   $Canvas create arc [expr $newx-10] [expr $newy-10] [expr $newx+10] \
+          [expr $newy+10] -start [RadToDeg [expr 2.8+$Bot($B,direction)]] \
+          -extent 60 -width 1 -fill $B -tag $Bot($B,tag)
+}
+
+#
+# Draw a fixed object on the canvas (used at start-up)
+#
+proc DrawObject {Obj Canvas} {
+   global Height
+   set x [lindex $Obj 1]
+   set y [lindex $Obj 2]
+   set size [lindex $Obj 3]
+   set x1 [expr $x - $size/2]
+   set y1 [expr $y - $size/2]
+   set x2 [expr $x + $size/2]
+   set y2 [expr $y + $size/2]
+   $Canvas create rectangle $x1 [expr $Height-$y1] $x2 [expr $Height-$y2] \
+                            -width 2 -fill yellow
+}
+
+#--------------------------------------------------------------
+# Initialize the Playing board and draw it's initial state
+#--------------------------------------------------------------
+proc InitBoard {W H Canvas} {
+   global Width Height ObjectList BotList
+   set Width [expr $W+10]
+   set Height [expr $H+10]
+   $Canvas create line 10 10 $Width 10 -width 4
+   $Canvas create line 10 10 10 $Height -width 4
+   $Canvas create line $Width $Height $Width 10 -width 4
+   $Canvas create line $Width $Height 10 $Height -width 4
+   foreach o $ObjectList {
+      DrawObject $o $Canvas
+   }
+   foreach b $BotList {
+      DrawBot $b $Canvas
+   }
+   update idletasks
+}
+
+#--------------------------------------------------------------
+# Not used in battle bot game
+#--------------------------------------------------------------
+proc DoFinish {} {
+   global AutoPlayer Finished
+   foreach player [array names AutoPlayer] {
+      puts $AutoPlayer($player) "quit"
+      catch {close $AutoPlayer($player)}
+   }
+   set Finished 1
+}
+
+#--------------------------------------------------------------
+# Change the players' turns
+#--------------------------------------------------------------
+proc ChangeTurn {} {
+   global WhoseTurn WhoseNotTurn DoAutoTurn Bot
+   if {"red" == $WhoseTurn} {
+      set WhoseTurn blue
+      set WhoseNotTurn red
+   } else {
+      set WhoseTurn red
+      set WhoseNotTurn blue
+   }
+   update
+   # If the player whose turn is next is a program, set the
+   # flag to indicate this, so that they will be invoked
+   if {[info exists Bot($WhoseTurn,pipe)]} {
+      set DoAutoTurn 1
+   } else {
+      set DoAutoTurn 0
+   }
+}
+
+#--------------------------------------------------------------
+# Do a scan and set the result if anything is detected
+#  -- need to add checking for walls and objects
+#--------------------------------------------------------------
+proc DoScan {B} {
+   global Bot Width Height ObjectList BotList
+   foreach b $BotList {
+      if {$b == $B} continue
+      set da [DistanceAngle $Bot($B,xpos) $Bot($B,ypos) \
+                            $Bot($b,xpos) $Bot($b,ypos)]
+      set dist [lindex $da 0]
+      set anglediff [expr $Bot($B,direction)-[lindex $da 1]]
+      #puts "d=$dist ad=$anglediff"
+      if {$dist < $::ScanRange && \
+          [expr abs($anglediff)] < $::ScanAngle} {
+         # return this object in scan
+         return "1 2 [RadToDeg $anglediff] [expr round($dist)] [RadToDeg $Bot($b,direction)]"
+      }
+   }
+   foreach o $ObjectList {
+      set da [DistanceAngle $Bot($B,xpos) $Bot($B,ypos) \
+                            [lindex $o 1] [lindex $o 2]]
+      # rough estimate: subtract the object's size (e.g. radius) from 
+      #                 the distance
+      set dist [expr [lindex $da 0]-[lindex $o 3]]
+      set anglediff [expr $Bot($B,direction)-[lindex $da 1]]
+      #puts "d=$dist ad=$anglediff"
+      if {$dist < $::ScanRange && \
+          [expr abs($anglediff)] < $::ScanAngle} {
+         # return this object in scan
+         #puts "object $o scanned by $B"
+         return "1 1 [RadToDeg $anglediff] [expr round($dist)] 0"
+      }
+   }
+   # Now check for walls in scan
+   if {($Bot($B,direction)<[expr $::PI/4] || \
+        $Bot($B,direction)>[expr 7*$::PI/4]) && \
+        $Bot($B,xpos)>[expr $Width-$::ScanRange*cos($Bot($B,direction))]} {
+      # return scan of right wall
+      #puts "right wall scanned by $B"
+      return "1 0 0 0 0"
+   } elseif {($Bot($B,direction)<[expr 5*$::PI/4] || \
+        $Bot($B,direction)>[expr 3*$::PI/4]) && \
+        $Bot($B,xpos)<[expr 10-$::ScanRange*cos($Bot($B,direction))]} {
+      # return scan of left wall
+      #puts "left wall scanned by $B"
+      return "1 0 0 0 0"
+   } elseif {($Bot($B,direction)<[expr 3*$::PI/4] || \
+        $Bot($B,direction)>[expr $::PI/4]) && \
+        $Bot($B,ypos)>[expr $Height-$::ScanRange*sin($Bot($B,direction))]} {
+      # return scan of top wall
+      #puts "top wall scanned by $B"
+      return "1 0 0 0 0"
+   } elseif {($Bot($B,direction)<[expr 7*$::PI/4] || \
+        $Bot($B,direction)>[expr 5*$::PI/4]) && \
+        $Bot($B,ypos)<[expr -1*$::ScanRange*sin($Bot($B,direction))]} {
+      # return scan of bottom wall
+      #puts "bottom wall scanned by $B"
+      return "1 0 0 0 0"
+   }
+   return "0 no scan"
+}
+
+#--------------------------------------------------------------
+# Do a fire action by a bot
+#--------------------------------------------------------------
+proc DoFire {B} {
+   global Bot TwoPI Width Height ObjectList BotList
+   set endx [expr 100*cos($Bot($B,direction)) + $Bot($B,xpos)]
+   set endy [expr 100*sin($Bot($B,direction)) + $Bot($B,ypos)]
+   .c create line $Bot($B,xpos) [expr $Height-$Bot($B,ypos)] $endx [expr $Height-$endy] -fill $B -width 3 -tag fire
+   update idletasks
+   # see if shot hit anyone - we should check for objects in the way, no?
+   foreach b $BotList {
+      if {$b == $B} continue
+      set da [DistanceAngle $Bot($B,xpos) $Bot($B,ypos) \
+                            $Bot($b,xpos) $Bot($b,ypos)]
+      set dist [lindex $da 0]
+      set anglediff [expr $Bot($B,direction)-[lindex $da 1]]
+      if {$dist < 100 && \
+          [expr abs($anglediff) < 0.25] } {
+         # calculate damage
+         set damage [expr (100.0-$dist)/2.0]
+         set damage [expr round($damage*(1.0-abs($anglediff)))]
+         set Bot($b,damage) [expr $Bot($b,damage) + $damage]
+         set Bot($b,damagetype) 2
+      }
+   }
+   # wait a little, then erase
+   after 10
+   .c delete fire
+   return "0 no scan"
+}
+
+
+#--------------------------------------------------------------
+# Do a battlebot-process turn
+#--------------------------------------------------------------
+proc DoBotTurn {B} {
+   global Bot ScanCost FireCost
+   #
+   # Put current bot state out to bot
+   #
+   set outline "[expr round($Bot($B,xpos))] [expr round($Bot($B,ypos))] [RadToDeg $Bot($B,direction)] $Bot($B,velocity) $Bot($B,fuel) $Bot($B,damage) $Bot($B,damagetype)"
+   #puts $outline 
+   puts $Bot($B,pipe) $outline 
+   # reset the damagetype flag
+   set Bot($B,damagetype) 0
+   #
+   # Put possible scan line out to bot
+   #
+   if {$Bot($B,doscan)} {
+      incr Bot($B,fuel) $ScanCost
+      set res [DoScan $B]
+      if {"0 no scan" != $res} {
+         #puts "$res"
+      }
+      puts $Bot($B,pipe) "$res"
+   } else {
+      #puts "0 no scan"
+      puts $Bot($B,pipe) "0 no scan"
+   }
+   flush $Bot($B,pipe)
+   flush stdout
+   #
+   # now read the bot's response (2 lines)
+   # - we should do something better in case of parse errors
+   #
+   gets $Bot($B,pipe) line
+   #puts "line1 ($line)"
+   set dirchange 0
+   set velchange 0
+   if {![regexp {(-?[0-9]*) (-?[0-9]*)} $line dummy dirchange velchange]} {
+      puts "1: unable to parse line ($line)"
+      return
+   }
+   set newdir [expr $Bot($B,direction) + [DegToRad $dirchange]]
+   if {$newdir < 0} {
+      set newdir [expr $newdir + $::TwoPI]
+   }
+   if {$newdir > $::TwoPI} {
+      set newdir [expr $newdir - $::TwoPI]
+   }
+   set newvel [expr $Bot($B,velocity) + $velchange]
+   gets $Bot($B,pipe) line
+   #puts "line2 ($line)"
+   if {![regexp {([a-z]*)} $line dummy action]} {
+      puts "2: unable to parse line ($line)"
+      return
+   }
+   if {"scan" == $action} {
+      set Bot($B,doscan) 1
+   } elseif {"fire" == $action} {
+      DoFire $B
+      incr Bot($B,fuel) $FireCost
+   }
+   set Bot($B,direction) $newdir
+   set Bot($B,velocity) $newvel
+   DrawBot $B .c
+}
+   
+
+#==============================================================
+# GUI Definition and Construction
+#==============================================================
+
+frame .canvasframe -bd 2 -relief groove -bg $BgColor
+frame .redplayerframe -bd 3 -relief groove -bg $BgColor
+frame .blueplayerframe -bd 3 -relief groove -bg $BgColor
+frame .turnframe -bd 3 -relief groove -bg $BgColor
+frame .playersframe -bd 5 -relief groove -bg $BgColor
+frame .controlframe -bd 2 -relief groove -bg $BgColor
+pack .redplayerframe .turnframe .blueplayerframe -in .playersframe -side left \
+      -fill x -expand 1
+pack .canvasframe .playersframe .controlframe -side top  -fill x
+
+canvas .c -bg $BgColor -height 520 -width 620
+.c bind all <Button-1> {
+   set line [lindex [.c gettags current] 0]
+   if {"current" != $line} {
+      DoMove $line $WhoseTurn
+   }
+}
+pack .c -in .canvasframe
+
+#button .init -text Init  -bg $BgColor -command {}
+#  InitBoard 4 4 .c
+#  UpdateBoard .c
+#{}
+button .quit -text Quit  -bg $BgColor -command {
+   if {!$Finished} {
+      DoFinish
+   }
+   exit 0
+}
+pack .quit -in .controlframe -side left -fill x -expand 1
+
+#set AMove "nomove"
+#entry .move -textvariable AMove -width 30
+#button .domove -text "Do Move" -command {
+#   set oldboxcount $BoxCount($WhoseTurn)
+#   MakeMove $AMove $WhoseTurn
+#   UpdateBoard .c
+#   if {$oldboxcount == $BoxCount($WhoseTurn)} {
+#      ChangeTurn
+#   }
+#}
+#pack .move .domove -in .controlframe -side top
+
+set BluePlayerName "Blue Player"
+label .bluename -textvariable BluePlayerName  -bg $BgColor
+#entry .bluecount -textvariable Bot(blue,damage) -state disabled  -bg $BgColor
+scale .bluecount -variable Bot(blue,damage) -from 0 -to $MaxDamage -bg $BgColor \
+      -fg blue -orient horizontal
+scale .bluefuel -variable Bot(blue,fuel) -from 0 -to $MaxFuel -bg $BgColor \
+      -fg blue -orient horizontal
+pack .bluename .bluecount .bluefuel -in .blueplayerframe -side top
+
+set RedPlayerName "Red Player"
+label .redname -textvariable RedPlayerName  -bg $BgColor
+#entry .redcount -textvariable Bot(red,damage) -state disabled  -bg $BgColor
+scale .redcount -variable Bot(red,damage) -from 0 -to $MaxDamage -bg $BgColor \
+      -fg red -orient horizontal
+scale .redfuel -variable Bot(red,fuel) -from 0 -to $MaxFuel -bg $BgColor \
+      -fg red -orient horizontal
+pack .redname .redcount .redfuel -in .redplayerframe -side top
+
+label .turn1 -text "Player" -bg $BgColor
+label .turn2 -text "Damage" -bg $BgColor
+label .turn3 -text "Fuel" -bg $BgColor
+#label .turnname -textvariable WhoseTurn -bg $BgColor
+pack .turn1 .turn2 .turn3 -in .turnframe -side top -pady 8
+
+#==============================================================
+# Main Program
+#==============================================================
+
+set Width 600
+set Height 500
+set DoAutoTurn 0
+
+#
+# Process command line arguments
+#
+set argi 0
+while {$argi < [llength $argv]} {
+   if {"-size" == [lindex $argv $argi]} {
+      incr argi
+      regexp {([0-9]+)x([0-9]+)} [lindex $argv $argi] dummy \
+             Width Height
+   } elseif {"-blue" == [lindex $argv $argi]} {
+      incr argi
+      set BluePlayerName  "Blue Auto: [lindex $argv $argi]"
+      set Bot(blue,pipe) [open "|[lindex $argv $argi] $Width $Height" r+]
+   } elseif {"-red" == [lindex $argv $argi]} {
+      incr argi
+      set RedPlayerName  "Red Auto: [lindex $argv $argi]"
+      set Bot(red,pipe) [open "|[lindex $argv $argi] $Width $Height" r+]
+   } elseif {"--help" == [lindex $argv $argi]} {
+      puts $HelpText
+      exit 1
+   } elseif {"-stdin" == [lindex $argv $argi]} {
+      set stdinGame 1
+   } else {
+      puts "Unkown argument: [lindex $argv $argi]"
+      exit 1
+   }
+   incr argi
+}
+
+#
+# Initialize board and graphical display
+#
+InitBoard $Width $Height .c
+
+#ChangeTurn
+#update idletasks
+#   puts "playing a game.."
+#   flush stdout
+#if {[info exists stdinGame]} {}
+#   puts "playing a stdin game.."
+#   flush stdout
+#   after 10
+#   StdinGame
+#{}
+#focus .
+
+#
+# Randomly choose who goes first (set WhoseTurn to the _wrong_ one!)
+#
+set choice [expr (int(rand()*1239))%2]
+if {$choice} {
+   set WhoseTurn red
+} else {
+   set WhoseTurn blue
+}
+ChangeTurn
+puts "$WhoseTurn is going first!"
+
+#while {1} {}
+#   after 7
+#   DrawBot blue .c
+#   DrawBot red .c
+#   update idletasks
+#   update
+#{}
+
+set done 0
+while {!$done} {
+   if {$Bot(blue,damage) >= $MaxDamage || $Bot(red,damage) >= $MaxDamage} break
+   if {$Bot(blue,fuel) <= 0 || $Bot(red,fuel) <= 0} break
+   after 20
+   if {$DoAutoTurn} {
+      #set DoAutoTurn 0
+      #puts "Player $WhoseTurn needs an autoturn"
+      DoBotTurn $WhoseTurn
+   } else {
+      DrawBot $WhoseTurn .c
+   }
+   ChangeTurn
+}
+
+if {$Bot(blue,damage) < $MaxDamage && $Bot(red,damage) >= $MaxDamage} {
+   set winner blue
+   set loser red
+} elseif {$Bot(red,damage) < $MaxDamage && $Bot(blue,damage) >= $MaxDamage} {
+   set winner red
+   set loser blue
+} else {
+   set bd [expr $Bot(blue,damage) - $Bot(blue,fuel)]
+   set rd [expr $Bot(red,damage) - $Bot(red,fuel)]
+   if {$bd >= $rd} {
+      set winner red
+      set loser blue
+   } else {
+      set winner blue
+      set loser red
+   }
+}
+
+.c create oval [expr $Bot($loser,xpos)-12] [expr $Height-($Bot($loser,ypos)-12)] \
+               [expr $Bot($loser,xpos)+12] [expr $Height-($Bot($loser,ypos)+12)] \
+               -fill black
+.c create text 200 200 -text "[string toupper $winner] WINS!!!" \
+    -font {Heletica 24 bold}
+
+focus .
+
